@@ -4,9 +4,10 @@
 use crate::definitions::{Clamp, Image};
 use crate::math::cast;
 use conv::ValueInto;
-use image::{GenericImageView, ImageBuffer, Pixel};
+use image::{GenericImage, GenericImageView, ImageBuffer, Pixel};
 #[cfg(feature = "rayon")]
 use rayon::prelude::*;
+use std::ops::{Deref, DerefMut};
 use std::{cmp, ops::Mul};
 
 #[derive(Copy, Clone, Debug)]
@@ -395,16 +396,17 @@ where
 /// Applies a projective transformation to an image, writing to a provided output.
 ///
 /// See the [`warp`](fn.warp.html) documentation for more information.
-pub fn warp_into<P>(
-    image: &Image<P>,
+pub fn warp_into<P, I: GenericImageView<Pixel = P> + Sync, OutContainer>(
+    image: &I,
     projection: &Projection,
     interpolation: Interpolation,
     default: P,
-    out: &mut Image<P>,
+    out: &mut ImageBuffer<P, OutContainer>,
 ) where
     P: Pixel + Send + Sync,
     <P as Pixel>::Subpixel: Send + Sync,
     <P as Pixel>::Subpixel: ValueInto<f32> + Clamp<f32> + Sync,
+    OutContainer: DerefMut<Target = [P::Subpixel]>,
 {
     let projection = projection.invert();
     let nn = |x, y| interpolate_nearest(image, x, y, default);
@@ -494,11 +496,12 @@ pub fn warp_into_with<P, F>(
 
 // Work horse of all warp functions
 // TODO: make faster by avoiding boundary checks in inner section of src image
-fn warp_inner<P, Fc, Fi>(out: &mut Image<P>, mapping: Fc, get_pixel: Fi)
+fn warp_inner<P, Container, Fc, Fi>(out: &mut ImageBuffer<P, Container>, mapping: Fc, get_pixel: Fi)
 where
     P: Pixel,
     <P as Pixel>::Subpixel: Send + Sync,
     <P as Pixel>::Subpixel: ValueInto<f32> + Clamp<f32>,
+    Container: DerefMut<Target = [P::Subpixel]>,
     Fc: Fn(f32, f32) -> (f32, f32) + Send + Sync,
     Fi: Fn(f32, f32) -> P + Send + Sync,
 {
@@ -617,7 +620,12 @@ where
     outp
 }
 
-fn interpolate_bicubic<P>(image: &Image<P>, x: f32, y: f32, default: P) -> P
+fn interpolate_bicubic<P, I: GenericImageView<Pixel = P>>(
+    image: &I,
+    x: f32,
+    y: f32,
+    default: P,
+) -> P
 where
     P: Pixel,
     <P as Pixel>::Subpixel: ValueInto<f32> + Clamp<f32>,
@@ -679,7 +687,12 @@ where
     })
 }
 
-fn interpolate_bilinear<P>(image: &Image<P>, x: f32, y: f32, default: P) -> P
+fn interpolate_bilinear<P, I: GenericImageView<Pixel = P>>(
+    image: &I,
+    x: f32,
+    y: f32,
+    default: P,
+) -> P
 where
     P: Pixel,
     <P as Pixel>::Subpixel: ValueInto<f32> + Clamp<f32>,
@@ -710,7 +723,12 @@ where
 }
 
 #[inline(always)]
-fn interpolate_nearest<P: Pixel>(image: &Image<P>, x: f32, y: f32, default: P) -> P {
+fn interpolate_nearest<P: Pixel, I: GenericImageView<Pixel = P>>(
+    image: &I,
+    x: f32,
+    y: f32,
+    default: P,
+) -> P {
     if x < -0.5 || y < -0.5 {
         return default;
     }
